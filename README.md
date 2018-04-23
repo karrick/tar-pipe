@@ -35,9 +35,10 @@ the ~900 GiB file system hierarchy, I ran rsync in verbose mode to
 display any changes needed to make the destination a duplicate of the
 source. In every test, the only differences were the file system
 modification times of the destination directories. These differences
-are due to the algorithm that tar-pipe uses that make it much faster
-than rsync for the bulk-transfer. This limitation is duscussed below
-in the Limitations section.
+were due to the algorithm that tar-pipe uses that make it much faster
+than rsync for the bulk-transfer. This limitation has since been
+eliminated without significantly impacting the performance of this
+program.
 
 ## Usage
 
@@ -93,11 +94,3 @@ The following file system objects are not yet implemented:
 1. Character devices
 1. Block devices
 1. FIFOs
-
-While all file system objects on the destination host will have the
-same meta data as they have on the source host, tar-pipe does not set
-the modification time of directories to match the modification time of
-the corresponding directories on the source host. This limitation
-would be simple to change, but could slow tar-pipe down as it would
-have to process the tar stream differently. I am considering different
-ways of doing this without the performance penalty.

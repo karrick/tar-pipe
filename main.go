@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/karrick/godirwalk"
 	"github.com/karrick/golf"
@@ -125,11 +126,19 @@ func withListen(bind string, callback func(ior io.Reader) error) error {
 	return err
 }
 
+// dirBlurb holds the name and modification time of a directory entry.
+type dirBlurb struct {
+	Name    string
+	ModTime time.Time
+}
+
 func receive(operands []string) error {
 	if len(operands) < 1 {
 		usage(fmt.Sprintf("cannot receive without binding address"))
 	}
 	return withListen(operands[0], func(ior io.Reader) error {
+		var directories []dirBlurb
+
 		buf := make([]byte, 64*1024)
 
 		tr := tar.NewReader(ior)
@@ -159,10 +168,13 @@ func receive(operands []string) error {
 						return err
 					}
 				}
-				// ??? modtime of directory will not match because directory
-				// will likely have files added to it after it is created.
+				// Cannot set the mtime of a directory entry now, but must do so
+				// after we process all the child entries in that directory. For
+				// now, we'll store a bit of information that we can use later
+				// to set the mtime for the directory.
+				directories = append(directories, dirBlurb{th.Name, th.ModTime})
 			case tar.TypeLink, tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
-				return fmt.Errorf("not implemented: %d: %q", th.Typeflag, th.Name)
+				fmt.Fprintf(os.Stderr, "tar-pipe: %s not implemented: %q\n", th.Typeflag, th.Name)
 			case tar.TypeSymlink:
 				if err = os.Symlink(th.Linkname, th.Name); err != nil {
 					return err
@@ -194,6 +206,20 @@ func receive(operands []string) error {
 				}
 			}
 		}
+
+		// Walk list of directories backwards, to ensure modification times are
+		// not updated by later updates deeper inside a directory
+		// location. Because program will send /foo through the pipe before
+		// /foo/bar, a reverse of the directory order will ensure we update the
+		// modification time for /foo/bar before we update the modification time
+		// for /foo.
+		for i := len(directories) - 1; i >= 0; i-- {
+			de := directories[i]
+			if err := os.Chtimes(de.Name, de.ModTime, de.ModTime); err != nil {
+				return err
+			}
+		}
+
 		return nil
 	})
 }
