@@ -83,7 +83,7 @@ the `-v, --verbose` command line flag, it displays connection
 information, compression information. The verbose flag on the source
 and destination are independent of each other.
 
-    [you@destination.example.com ~]$ tar-pipe -d receive :6969
+    [you@destination.example.com ~]$ tar-pipe -v receive :6969
 
 ## Limitations
 
