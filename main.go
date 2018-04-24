@@ -23,6 +23,19 @@ var (
 func main() {
 	golf.Parse()
 
+	if *optHelp {
+		fmt.Fprintf(os.Stderr, "%s\n", filepath.Base(os.Args[0]))
+		fmt.Fprintf(os.Stderr, "        optimized transfer of directory contents over TCP socket\n\n")
+		fmt.Fprintf(os.Stderr, "Copies one or more file system entries from source to destination over a\n")
+		fmt.Fprintf(os.Stderr, "network socket. While `rsync` is the preferred choice for this particular task\n")
+		fmt.Fprintf(os.Stderr, "when synchronizing files, when copying files for the first time, `tar-pipe` is\n")
+		fmt.Fprintf(os.Stderr, "much faster.\n\n")
+		fmt.Fprintf(os.Stderr, "Always start `tar-pipe` on the destination first:\n\ttar-pipe -vz receive :6969\n\n")
+		fmt.Fprintf(os.Stderr, "Then on source:\n\ttar-pipe -vz send destination.example.com:6969 dir1 dir2 file3...\n\n")
+		golf.Usage()
+		exit(nil)
+	}
+
 	args := golf.Args()
 	if len(args) == 0 {
 		usage("expected sub-command")
@@ -53,6 +66,12 @@ func usage(message string) {
 }
 
 func verbose(format string, a ...interface{}) {
+	if *optVerbose {
+		_, _ = fmt.Fprintf(os.Stdout, format, a...)
+	}
+}
+
+func warning(format string, a ...interface{}) {
 	if *optVerbose {
 		_, _ = fmt.Fprintf(os.Stderr, format, a...)
 	}
@@ -278,7 +297,7 @@ func tarpath(tw *tar.Writer, osPathname string, buf []byte) error {
 			return tarnode(tw, osPathname, buf)
 		},
 		ErrorCallback: func(osPathname string, err error) godirwalk.ErrorAction {
-			fmt.Fprintf(os.Stderr, "%s: %s\n", osPathname, err)
+			warning("%s: %s\n", osPathname, err)
 			return godirwalk.SkipNode
 		},
 		ScratchBuffer: make([]byte, 64*1024),
@@ -331,7 +350,7 @@ func tarnode(tw *tar.Writer, osPathname string, buf []byte) error {
 		// os.ModeDevice (including os.ModeCharDevice) is not supported because
 		// I do not have a method of getting the major and minor device numbers
 		// of a file system entry without calling C.
-		fmt.Fprintf(os.Stderr, "%s not supported: %s\n", mode, osPathname)
+		warning("%s not supported: %s\n", mode, osPathname)
 		return nil
 	}
 
