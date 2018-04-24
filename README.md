@@ -88,8 +88,18 @@ and destination are independent of each other.
 
 ## Limitations
 
-The following file system objects are not yet implemented:
+Because each hard links to a file is identical to each other hard link
+to the same file, the algorithm to determine whether a particular file
+system entry is a unique file or merely a hard link to another file in
+the same hierarchy is an O(n^2) problem that is not implemented
+here. Furthermore, even if two unique files have the same data does
+not mean the user wants a hard link created on the destination. As a
+result hard links on the source are replicated on the destination as
+merely another file that happens to have identical contents.
 
-1. Character devices
-1. Block devices
-1. FIFOs
+The following file system objects are not supported:
+
+1. Block and Character devices (TODO)
+1. Extracting a FIFO (named pipe) is not supported on Windows (OS
+   limitation)
+1. UNIX domain sockets (tar archive format limitation)

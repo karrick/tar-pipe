@@ -1,3 +1,4 @@
 github.com/karrick/godirwalk v1.6.2 h1:ckqp38PLaR5Iag1Hm0EKtn8ELFKhFxCZr6IvJLAbN+8=
 github.com/karrick/golf v1.0.0 h1:BXkglT+6BBvKpB4/MSmp5JmZz9uHXce3rYSgrwgn48w=
 github.com/pkg/errors v0.8.0 h1:WdK/asTD0HN+q6hsWO3/vpuAkAr+tw6aNJNDFFf0+qw=
+golang.org/x/sys v0.0.0-20180420145319-79b0c6888797 h1:ux9vYny+vlzqIcwoO6gRu+voPvKJA10ZceuJwWf2J88=

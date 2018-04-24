@@ -160,6 +160,7 @@ func receive(operands []string) error {
 			case tar.TypeDir:
 				_, err = os.Stat(th.Name)
 				if err == nil {
+					// TODO: what if entry is not a directory?
 					if err = os.Chmod(th.Name, os.FileMode(th.Mode)); err != nil {
 						return err
 					}
@@ -184,31 +185,15 @@ func receive(operands []string) error {
 				if err = os.Symlink(th.Linkname, th.Name); err != nil {
 					return err
 				}
-				// ??? Chtimes seems to not work on symlink
-			case tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
-				fmt.Fprintf(os.Stderr, "tar-pipe: %s not implemented: %q\n", th.Typeflag, th.Name)
+				// ??? Chtimes does not seem to work on a symlink
+			case tar.TypeFifo:
+				if err = makeFIFO(th, tr, buf); err != nil {
+					return err
+				}
 			default:
-				// NOTE: Any other file type, including tar.TypeReg, ought to be
-				// written as a regular file, to be inspected by user.
-				tempName := th.Name + ".partial"
-				fh, err := os.OpenFile(tempName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(th.Mode))
-				if err != nil {
-					return err
-				}
-				nc, err := io.CopyBuffer(fh, tr, buf)
-				if err != nil {
-					return err
-				}
-				if err = fh.Close(); err != nil {
-					return err
-				}
-				if nc != th.Size {
-					return fmt.Errorf("mis-write: %d written, expected: %d", nc, th.Size)
-				}
-				if err = os.Rename(tempName, th.Name); err != nil {
-					return err
-				}
-				if err = os.Chtimes(th.Name, th.ModTime, th.ModTime); err != nil {
+				// TODO: support tar.TypeBlock
+				// TODO: support tar.TypeChar
+				if err = makeRegular(tr, th, buf); err != nil {
 					return err
 				}
 			}
@@ -231,6 +216,30 @@ func receive(operands []string) error {
 	})
 }
 
+func makeRegular(tr *tar.Reader, th *tar.Header, buf []byte) error {
+	// NOTE: Any other file type, including tar.TypeReg, ought to be written as
+	// a regular file, to be inspected by user.
+	tempName := th.Name + ".partial"
+	fh, err := os.OpenFile(tempName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(th.Mode))
+	if err != nil {
+		return err
+	}
+	nc, err := io.CopyBuffer(fh, tr, buf)
+	if err != nil {
+		return err
+	}
+	if err = fh.Close(); err != nil {
+		return err
+	}
+	if nc != th.Size {
+		return fmt.Errorf("mis-write: %d written, expected: %d", nc, th.Size)
+	}
+	if err = os.Rename(tempName, th.Name); err != nil {
+		return err
+	}
+	return os.Chtimes(th.Name, th.ModTime, th.ModTime)
+}
+
 // it would seem send transmits a format that native tar cannot decode
 
 func send(operands []string) error {
@@ -243,8 +252,9 @@ func send(operands []string) error {
 		if len(operands) == 1 {
 			operands = append(operands, ".")
 		}
+		buf := make([]byte, 64*1024)
 		for _, operand := range operands[1:] {
-			if err = tarpath(tw, operand); err != nil {
+			if err = tarpath(tw, operand, buf); err != nil {
 				return err
 			}
 		}
@@ -255,24 +265,28 @@ func send(operands []string) error {
 	})
 }
 
-func tarpath(tw *tar.Writer, osPathname string) error {
+func tarpath(tw *tar.Writer, osPathname string, buf []byte) error {
 	fi, err := os.Stat(osPathname)
 	if err != nil {
 		return err
 	}
-	if fi.Mode()&os.ModeDir == 0 {
-		return tarnode(tw, osPathname)
+	if !fi.IsDir() {
+		return tarnode(tw, osPathname, buf)
 	}
 	return godirwalk.Walk(osPathname, &godirwalk.Options{
-		Unsorted:      true,
-		ScratchBuffer: make([]byte, 64*1024),
-		Callback: func(osPathname string, de *godirwalk.Dirent) error {
-			return tarnode(tw, osPathname)
+		Callback: func(osPathname string, _ *godirwalk.Dirent) error {
+			return tarnode(tw, osPathname, buf)
 		},
+		ErrorCallback: func(osPathname string, err error) godirwalk.ErrorAction {
+			fmt.Fprintf(os.Stderr, "%s: %s\n", osPathname, err)
+			return godirwalk.SkipNode
+		},
+		ScratchBuffer: make([]byte, 64*1024),
+		Unsorted:      true,
 	})
 }
 
-func tarnode(tw *tar.Writer, osPathname string) error {
+func tarnode(tw *tar.Writer, osPathname string, buf []byte) error {
 	fi, err := os.Lstat(osPathname)
 	if err != nil {
 		return err
@@ -286,6 +300,11 @@ func tarnode(tw *tar.Writer, osPathname string) error {
 		Name:    osPathname,
 	}
 
+	if mode&os.ModeDir != 0 {
+		th.Typeflag = tar.TypeDir
+		return tw.WriteHeader(th)
+	}
+
 	if mode&os.ModeSymlink != 0 {
 		referent, err := os.Readlink(osPathname)
 		if err != nil {
@@ -296,12 +315,31 @@ func tarnode(tw *tar.Writer, osPathname string) error {
 		return tw.WriteHeader(th)
 	}
 
-	if mode&os.ModeDir != 0 {
-		th.Typeflag = tar.TypeDir
+	if mode&os.ModeNamedPipe /* FIFO */ != 0 {
+		th.Typeflag = tar.TypeFifo
 		return tw.WriteHeader(th)
 	}
 
-	// TODO: add support for other file types
+	if !mode.IsRegular() {
+		// At this point, if there are any remaining file mode bits, they are
+		// not supported, and ought to be skipped with an appropriate error
+		// message.
+		//
+		// os.ModeSocket (unix domain sockets) is not supported because tar
+		// format does not provide means of classifying it.
+		//
+		// os.ModeDevice (including os.ModeCharDevice) is not supported because
+		// I do not have a method of getting the major and minor device numbers
+		// of a file system entry without calling C.
+		fmt.Fprintf(os.Stderr, "%s not supported: %s\n", mode, osPathname)
+		return nil
+	}
+
+	// NOTE: There is no os library mode type for hard link, because every hard
+	// link is equal to each other hard link. Discovering whether a particular
+	// node is a hard link with another file in the same file system is an
+	// O(n^2) problem, and not solved here.
+
 	th.Size = int64(fi.Size())
 	th.Typeflag = tar.TypeReg
 	if err := tw.WriteHeader(th); err != nil {
@@ -311,7 +349,7 @@ func tarnode(tw *tar.Writer, osPathname string) error {
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(tw, fh)
+	_, err = io.CopyBuffer(tw, fh, buf)
 	if err2 := fh.Close(); err == nil {
 		err = err2
 	}
