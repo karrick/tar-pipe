@@ -67,21 +67,19 @@ func usage(message string) {
 
 func verbose(format string, a ...interface{}) {
 	if *optVerbose {
-		_, _ = fmt.Fprintf(os.Stdout, format, a...)
+		_, _ = fmt.Fprintf(os.Stdout, "tar-pipe: "+format, a...)
 	}
 }
 
 func warning(format string, a ...interface{}) {
-	if *optVerbose {
-		_, _ = fmt.Fprintf(os.Stderr, format, a...)
-	}
+	_, _ = fmt.Fprintf(os.Stderr, "tar-pipe: "+format, a...)
 }
 
 func withGzipReader(use bool, ior io.Reader, callback func(ior io.Reader) error) error {
 	if !use {
 		return callback(ior)
 	}
-	verbose("# Using gzip compression\n")
+	verbose("Using gzip compression\n")
 	z, err := gzip.NewReader(ior)
 	if err != nil {
 		return err
@@ -97,7 +95,7 @@ func withGzipWriter(use bool, iow io.Writer, callback func(iow io.Writer) error)
 	if !use {
 		return callback(iow)
 	}
-	verbose("# Using gzip compression\n")
+	verbose("Using gzip compression\n")
 	z := gzip.NewWriter(iow)
 	err := callback(z)
 	if err2 := z.Close(); err == nil {
@@ -111,7 +109,7 @@ func withDial(remote string, callback func(iow io.Writer) error) error {
 	if err != nil {
 		return err
 	}
-	verbose("# Connected: %q\n", conn.RemoteAddr())
+	verbose("Connected: %q\n", conn.RemoteAddr())
 
 	err = withGzipWriter(*optZip, conn, func(iow io.Writer) error {
 		return callback(iow)
@@ -128,12 +126,12 @@ func withListen(bind string, callback func(ior io.Reader) error) error {
 	if err != nil {
 		return err
 	}
-	verbose("# Listening: %q\n", bind)
+	verbose("Listening: %q\n", bind)
 	conn, err := l.Accept()
 	if err != nil {
 		return err
 	}
-	verbose("# Accepted connection: %q\n", conn.RemoteAddr())
+	verbose("Accepted connection: %q\n", conn.RemoteAddr())
 
 	err = withGzipReader(*optZip, conn, func(ior io.Reader) error {
 		return callback(ior)
@@ -300,7 +298,7 @@ func tarpath(tw *tar.Writer, osPathname string, buf []byte) error {
 			warning("%s: %s\n", osPathname, err)
 			return godirwalk.SkipNode
 		},
-		ScratchBuffer: make([]byte, 64*1024),
+		ScratchBuffer: make([]byte, 64*1024), // own buffer to walk directory
 		Unsorted:      true,
 	})
 }
@@ -339,18 +337,24 @@ func tarnode(tw *tar.Writer, osPathname string, buf []byte) error {
 		return tw.WriteHeader(th)
 	}
 
+	if mode&os.ModeSocket /* unix domain socket */ != 0 {
+		warning("%s: tar format cannot archive socket\n", osPathname)
+		return nil
+	}
+
+	if mode&os.ModeDevice /* including os.ModeCharDevice */ != 0 {
+		// os.ModeDevice (including os.ModeCharDevice) is not supported because
+		// I do not have a method of getting the major and minor device numbers
+		// of a file system entry without calling C.
+		warning("%s: cannot archive devices\n", osPathname)
+		return nil
+	}
+
 	if !mode.IsRegular() {
 		// At this point, if there are any remaining file mode bits, they are
 		// not supported, and ought to be skipped with an appropriate error
 		// message.
-		//
-		// os.ModeSocket (unix domain sockets) is not supported because tar
-		// format does not provide means of classifying it.
-		//
-		// os.ModeDevice (including os.ModeCharDevice) is not supported because
-		// I do not have a method of getting the major and minor device numbers
-		// of a file system entry without calling C.
-		warning("%s not supported: %s\n", mode, osPathname)
+		warning("%s: %s not supported\n", osPathname, mode)
 		return nil
 	}
 

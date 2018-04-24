@@ -105,6 +105,6 @@ merely another file that happens to have identical contents.
 The following file system objects are not supported:
 
 1. Block and Character devices (TODO)
-1. Extracting a FIFO (named pipe) is not supported on Windows (OS
-   limitation), but is supported on UNIX like systems.
-1. UNIX domain sockets (tar archive format limitation)
+1. Extracting a FIFO (named pipe) is not supported on Windows™ (OS
+   limitation), but is supported on UNIX™ like systems.
+1. UNIX™ domain sockets (tar archive format limitation)
