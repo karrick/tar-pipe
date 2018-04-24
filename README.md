@@ -61,10 +61,10 @@ After `tar-pipe` finishes, `~/dir1` and `~/dir2` from
 
 ### Compression
 
-By default `tar-pipe1 sends the raw tar stream without compression. To
+By default `tar-pipe` sends the raw tar stream without compression. To
 sacrifice some CPU overhead to acheive better network throughput,
-`tar-pipe` will compress the tar stream using gzip when the `-z, --gzip`
-command line flags are provided.
+`tar-pipe` will compress the tar stream using gzip when the `-z,
+--gzip` command line flags are provided.
 
 *NOTE:* Both the sender and receiver must be invoked with the
 compression flag, or neither must be invoked with the compression
