@@ -90,7 +90,6 @@ and destination are independent of each other.
 
 The following file system objects are not yet implemented:
 
-1. Hard links (symbolic links _are_ supported)
 1. Character devices
 1. Block devices
 1. FIFOs

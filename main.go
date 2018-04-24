@@ -173,13 +173,20 @@ func receive(operands []string) error {
 				// now, we'll store a bit of information that we can use later
 				// to set the mtime for the directory.
 				directories = append(directories, dirBlurb{th.Name, th.ModTime})
-			case tar.TypeLink, tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
-				fmt.Fprintf(os.Stderr, "tar-pipe: %s not implemented: %q\n", th.Typeflag, th.Name)
+			case tar.TypeLink:
+				if err = os.Link(th.Linkname, th.Name); err != nil {
+					return err
+				}
+				if err = os.Chtimes(th.Name, th.ModTime, th.ModTime); err != nil {
+					return err
+				}
 			case tar.TypeSymlink:
 				if err = os.Symlink(th.Linkname, th.Name); err != nil {
 					return err
 				}
 				// ??? Chtimes seems to not work on symlink
+			case tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
+				fmt.Fprintf(os.Stderr, "tar-pipe: %s not implemented: %q\n", th.Typeflag, th.Name)
 			default:
 				// NOTE: Any other file type, including tar.TypeReg, ought to be
 				// written as a regular file, to be inspected by user.
