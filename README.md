@@ -65,7 +65,8 @@ tar-pipe will compress the tar stream using gzip when the `-z, --gzip`
 command line flags are provided.
 
 *NOTE:* Both the sender and receiver must be invoked with the
-compression flag.
+compression flag, or neither must be invoked with the compression
+flag.
 
 On the destination host:
 
@@ -82,13 +83,15 @@ destination hosts unless any errors are encountered, in which case
 errors are printed to standard error. When tar-pipe is invoked with
 the `-v, --verbose` command line flag, it displays connection
 information, compression information. The verbose flag on the source
-and destination are independent of each other.
+and destination are independent of each other. In other words you may
+have verbose on neither of the source or the destination, either of
+them, or both of them.
 
     [you@destination.example.com ~]$ tar-pipe -v receive :6969
 
 ## Limitations
 
-Because each hard links to a file is identical to each other hard link
+Because each hard link to a file is identical to each other hard link
 to the same file, the algorithm to determine whether a particular file
 system entry is a unique file or merely a hard link to another file in
 the same hierarchy is an O(n^2) problem that is not implemented
@@ -101,5 +104,5 @@ The following file system objects are not supported:
 
 1. Block and Character devices (TODO)
 1. Extracting a FIFO (named pipe) is not supported on Windows (OS
-   limitation)
+   limitation), but is supported on UNIX like systems.
 1. UNIX domain sockets (tar archive format limitation)
