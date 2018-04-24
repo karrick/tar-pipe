@@ -25,13 +25,13 @@ func main() {
 
 	if *optHelp {
 		fmt.Fprintf(os.Stderr, "%s\n", filepath.Base(os.Args[0]))
-		fmt.Fprintf(os.Stderr, "        optimized transfer of directory contents over TCP socket\n\n")
+		fmt.Fprintf(os.Stderr, "\toptimized transfer of file system entries over TCP socket\n\n")
 		fmt.Fprintf(os.Stderr, "Copies one or more file system entries from source to destination over a\n")
 		fmt.Fprintf(os.Stderr, "network socket. While `rsync` is the preferred choice for this particular task\n")
 		fmt.Fprintf(os.Stderr, "when synchronizing files, when copying files for the first time, `tar-pipe` is\n")
 		fmt.Fprintf(os.Stderr, "much faster.\n\n")
-		fmt.Fprintf(os.Stderr, "Always start `tar-pipe` on the destination first:\n\ttar-pipe -vz receive :6969\n\n")
-		fmt.Fprintf(os.Stderr, "Then on source:\n\ttar-pipe -vz send destination.example.com:6969 dir1 dir2 file3...\n\n")
+		fmt.Fprintf(os.Stderr, "Always start `tar-pipe` on the destination first:\n\ttar-pipe receive :6969\n\n")
+		fmt.Fprintf(os.Stderr, "Then on source:\n\ttar-pipe send destination.example.com:6969 dir1 dir2 file3...\n\n")
 		golf.Usage()
 		exit(nil)
 	}

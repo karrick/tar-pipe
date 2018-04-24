@@ -1,6 +1,6 @@
 # tar-pipe
 
-`tar-pipe` optimized transfer of directory contents over TCP socket.
+`tar-pipe` optimized transfer of file system entries over TCP socket.
 
 ## Description
 
