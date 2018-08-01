@@ -9,7 +9,7 @@ import (
 	"io"
 )
 
-const EncryptionChunkSize = 12
+const EncryptionChunkSize = 4096
 
 type StreamDecryptor struct {
 	aead      cipher.AEAD
@@ -39,8 +39,6 @@ func NewDecryptor(rc io.ReadCloser, key [32]byte) (*StreamDecryptor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot read nonce: %s", err)
 	}
-
-	// fmt.Fprintf(os.Stderr, "decryption nonce: %q\n", nonce)
 
 	return &StreamDecryptor{
 		aead:  gcm,
@@ -144,8 +142,6 @@ func NewEncryptor(wc io.WriteCloser, key [32]byte) (*StreamEncryptor, error) {
 		return nil, fmt.Errorf("cannot write nonce: %s", err)
 	}
 
-	// fmt.Fprintf(os.Stderr, "encryption nonce: %q\n", nonce)
-
 	return &StreamEncryptor{
 		aead:      gcm,
 		nonce:     nonce,
@@ -211,7 +207,6 @@ func (se *StreamEncryptor) Write(buf []byte) (int, error) {
 }
 
 func (se *StreamEncryptor) writeFrame(buf []byte) (int, error) {
-	// fmt.Fprintf(os.Stderr, "writeFrame(%q)\n", buf)
 	if se.err != nil {
 		return 0, se.err
 	}
