@@ -78,6 +78,23 @@ On the source host:
 
     [you@source.example.com ~]$ tar-pipe -z send destination.example.com:6969 dir1 dir2 ...
 
+### Encryption
+
+By default `tar-pipe` sends the raw tar stream in the clear, that is
+to say, without encrpytion. To sacrifice some CPU overhead to ensure
+your bytes remain private, `tar-pipe` will encrypt the tar stream
+using TLS when the `-s, --secure` command line flags are
+provided. Note the same passphrase must be used on both the sending
+and receiving end of the connection.
+
+On the destination host:
+
+    [you@destination.example.com ~]$ tar-pipe -s receive :6969
+
+On the source host:
+
+    [you@source.example.com ~]$ tar-pipe -s send destination.example.com:6969 dir1 dir2 ...
+
 ### Verbose Output
 
 By default `tar-pipe` does not display any output on the source or

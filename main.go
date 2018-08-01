@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"bufio"
 	"compress/gzip"
 	"fmt"
 	"io"
@@ -12,10 +13,15 @@ import (
 
 	"github.com/karrick/godirwalk"
 	"github.com/karrick/golf"
+	"golang.org/x/crypto/bcrypt"
 )
 
+const bufferSize = 4096
+
 var (
+	key        [32]byte
 	optHelp    = golf.BoolP('h', "help", false, "print help then exit")
+	optSecure  = golf.BoolP('s', "secure", false, "prompt for passphrase and use symmetric key encryption")
 	optVerbose = golf.BoolP('v', "verbose", false, "print verbose information")
 	optZip     = golf.BoolP('z', "gzip", false, "(de-)compress with gzip")
 )
@@ -39,6 +45,23 @@ func main() {
 	args := golf.Args()
 	if len(args) == 0 {
 		usage("expected sub-command")
+	}
+
+	if *optSecure {
+		fmt.Printf("Passphrase: ")
+		reader := bufio.NewReader(os.Stdin)
+		passphrase, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot read input: %s", err)
+			os.Exit(1)
+		}
+		kk, err := bcrypt.GenerateFromPassword([]byte(passphrase), 14)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot read input: %s", err)
+			os.Exit(1)
+		}
+		fmt.Printf("len(key): %d\n", len(kk))
+		copy(key[:], kk)
 	}
 
 	cmd, args := args[0], args[1:]
@@ -75,12 +98,12 @@ func warning(format string, a ...interface{}) {
 	_, _ = fmt.Fprintf(os.Stderr, "tar-pipe: "+format, a...)
 }
 
-func withGzipReader(use bool, ior io.Reader, callback func(ior io.Reader) error) error {
+func withGzipReader(use bool, rc io.ReadCloser, callback func(io.ReadCloser) error) error {
 	if !use {
-		return callback(ior)
+		return callback(rc)
 	}
 	verbose("Using gzip compression\n")
-	z, err := gzip.NewReader(ior)
+	z, err := gzip.NewReader(rc)
 	if err != nil {
 		return err
 	}
@@ -91,12 +114,46 @@ func withGzipReader(use bool, ior io.Reader, callback func(ior io.Reader) error)
 	return err
 }
 
-func withGzipWriter(use bool, iow io.Writer, callback func(iow io.Writer) error) error {
+func withDecrpytionReader(use bool, rc io.ReadCloser, callback func(io.Reader) error) error {
 	if !use {
-		return callback(iow)
+		return callback(rc)
+	}
+	verbose("Using encryption\n")
+
+	sd, err := NewDecryptor(rc, key)
+	if err != nil {
+		return err
+	}
+	err = callback(sd)
+	if err2 := sd.Close(); err == nil {
+		err = err2
+	}
+	return err
+}
+
+func withEncryptionWriter(use bool, wc io.WriteCloser, callback func(io.WriteCloser) error) error {
+	if !use {
+		return callback(wc)
+	}
+	verbose("Using encryption\n")
+
+	z, err := NewEncryptor(wc, key)
+	if err != nil {
+		return err
+	}
+	err = callback(z)
+	if err2 := z.Close(); err == nil {
+		err = err2
+	}
+	return err
+}
+
+func withGzipWriter(use bool, wc io.WriteCloser, callback func(io.WriteCloser) error) error {
+	if !use {
+		return callback(wc)
 	}
 	verbose("Using gzip compression\n")
-	z := gzip.NewWriter(iow)
+	z := gzip.NewWriter(wc)
 	err := callback(z)
 	if err2 := z.Close(); err == nil {
 		err = err2
@@ -104,15 +161,15 @@ func withGzipWriter(use bool, iow io.Writer, callback func(iow io.Writer) error)
 	return err
 }
 
-func withDial(remote string, callback func(iow io.Writer) error) error {
+func withDial(remote string, callback func(io.WriteCloser) error) error {
 	conn, err := net.Dial("tcp", remote)
 	if err != nil {
 		return err
 	}
 	verbose("Connected: %q\n", conn.RemoteAddr())
 
-	err = withGzipWriter(*optZip, conn, func(iow io.Writer) error {
-		return callback(iow)
+	err = withGzipWriter(*optZip, conn, func(wc io.WriteCloser) error {
+		return callback(wc)
 	})
 
 	if err2 := conn.Close(); err == nil {
@@ -121,7 +178,7 @@ func withDial(remote string, callback func(iow io.Writer) error) error {
 	return err
 }
 
-func withListen(bind string, callback func(ior io.Reader) error) error {
+func withListen(bind string, callback func(ior io.ReadCloser) error) error {
 	l, err := net.Listen("tcp", bind)
 	if err != nil {
 		return err
@@ -133,8 +190,8 @@ func withListen(bind string, callback func(ior io.Reader) error) error {
 	}
 	verbose("Accepted connection: %q\n", conn.RemoteAddr())
 
-	err = withGzipReader(*optZip, conn, func(ior io.Reader) error {
-		return callback(ior)
+	err = withGzipReader(*optZip, conn, func(rc io.ReadCloser) error {
+		return callback(rc)
 	})
 
 	if err2 := conn.Close(); err == nil {
@@ -153,12 +210,12 @@ func receive(operands []string) error {
 	if len(operands) < 1 {
 		usage(fmt.Sprintf("cannot receive without binding address"))
 	}
-	return withListen(operands[0], func(ior io.Reader) error {
+	return withListen(operands[0], func(rc io.ReadCloser) error {
 		var directories []dirBlurb
 
 		buf := make([]byte, 64*1024)
 
-		tr := tar.NewReader(ior)
+		tr := tar.NewReader(rc)
 		for {
 			th, err := tr.Next()
 			if err == io.EOF {
@@ -263,9 +320,9 @@ func send(operands []string) error {
 	if len(operands) < 1 {
 		usage(fmt.Sprintf("cannot send without destination address"))
 	}
-	return withDial(operands[0], func(iow io.Writer) error {
+	return withDial(operands[0], func(wc io.WriteCloser) error {
 		var err error
-		tw := tar.NewWriter(iow)
+		tw := tar.NewWriter(wc)
 		if len(operands) == 1 {
 			operands = append(operands, ".")
 		}
