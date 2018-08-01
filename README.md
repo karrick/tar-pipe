@@ -9,8 +9,8 @@ from source to destination over a network socket. While `rsync` is the
 preferred choice for this particular task when synchronizing files,
 when copying files for first time, `tar-pipe` is much faster.
 
-`tar-pipe` can be configured to compress the data using gzip
-compression.
+`tar-pipe` can be configured to compress the data using gzip and or
+encrypt the data using AES-GCM encryption algorithm.
 
 ### Performance and Reliability
 
@@ -83,9 +83,11 @@ On the source host:
 By default `tar-pipe` sends the raw tar stream in the clear, that is
 to say, without encrpytion. To sacrifice some CPU overhead to ensure
 your bytes remain private, `tar-pipe` will encrypt the tar stream
-using TLS when the `-s, --secure` command line flags are
+using AES-GCM when the `-s, --secure` command line flag is
 provided. Note the same passphrase must be used on both the sending
-and receiving end of the connection.
+and receiving end of the connection. The `-s, --secure` command line
+flag accepts no options. When provided, `tar-pipe` will prompt you for
+the passphrase to use for the data stream.
 
 On the destination host:
 
