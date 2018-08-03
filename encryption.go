@@ -168,25 +168,23 @@ func (se *StreamEncryptor) Write(buf []byte) (int, error) {
 		return 0, se.err
 	}
 
-	if true {
-		// When new data will fit into plaintext buffer, append it.
-		if len(se.plaintext) >= se.idx+len(buf) {
-			nc := copy(se.plaintext[se.idx:], buf)
-			se.idx += nc
-			return nc, nil
-		}
+	// When new data will fit into plaintext buffer, append it.
+	if len(se.plaintext) >= se.idx+len(buf) {
+		nc := copy(se.plaintext[se.idx:], buf)
+		se.idx += nc
+		return nc, nil
+	}
 
-		// New data will not fit onto plaintext buffer, so send existing plaintext
-		// buffer.
-		if se.err = se.Flush(); se.err != nil {
-			return 0, se.err
-		}
+	// New data will not fit onto plaintext buffer, so send existing plaintext
+	// buffer.
+	if se.err = se.Flush(); se.err != nil {
+		return 0, se.err
+	}
 
-		// When new data will fit into plaintext buffer, append it.
-		if len(se.plaintext) >= len(buf) {
-			se.idx = copy(se.plaintext, buf)
-			return se.idx, nil
-		}
+	// When new data will fit into plaintext buffer, append it.
+	if len(se.plaintext) >= len(buf) {
+		se.idx = copy(se.plaintext, buf)
+		return se.idx, nil
 	}
 
 	// Send this blob
