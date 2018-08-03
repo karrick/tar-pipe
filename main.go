@@ -47,14 +47,13 @@ func main() {
 	}
 
 	if *optSecure {
-		// fmt.Printf("Passphrase: ")
-		// reader := bufio.NewReader(os.Stdin)
-		// passphrase, err := reader.ReadString('\n')
-		// if err != nil {
-		// 	fmt.Fprintf(os.Stderr, "cannot read input: %s", err)
-		// 	os.Exit(1)
-		// }
-		passphrase := "test-one"
+		fmt.Printf("Passphrase: ")
+		reader := bufio.NewReader(os.Stdin)
+		passphrase, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot read input: %s", err)
+			os.Exit(1)
+		}
 		key = Key32FromPassphrase(passphrase, passphrase)
 	}
 
