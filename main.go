@@ -63,10 +63,6 @@ func main() {
 		exit(receive(args))
 	case "send":
 		exit(send(args))
-	case "receiveLines":
-		exit(receiveLines(args))
-	case "sendLines":
-		exit(sendLines(args))
 	default:
 		usage(fmt.Sprintf("invalid sub-command: %q", cmd))
 	}
@@ -96,9 +92,17 @@ func warning(format string, a ...interface{}) {
 }
 
 func withDial(remote string, callback func(io.Writer) error) error {
-	conn, err := net.Dial("tcp", remote)
-	if err != nil {
-		return err
+	var conn net.Conn
+	var err error
+
+	for {
+		verbose("Dialing: %q\n", remote)
+		conn, err = net.Dial("tcp", remote)
+		if err == nil {
+			break
+		}
+		verbose("Unable to connect: %s\n", err)
+		time.Sleep(5 * time.Second)
 	}
 	verbose("Connected: %q\n", conn.RemoteAddr())
 
@@ -198,21 +202,6 @@ func withDecompressingReader(use bool, r io.Reader, callback func(io.Reader) err
 type dirBlurb struct {
 	Name    string
 	ModTime time.Time
-}
-
-func receiveLines(operands []string) error {
-	if len(operands) < 1 {
-		usage(fmt.Sprintf("cannot receive without binding address"))
-	}
-	return withListen(operands[0], func(r io.Reader) error {
-		return withDecrpytingReader(*optSecure, r, func(r io.Reader) error {
-			scanner := bufio.NewScanner(r)
-			for scanner.Scan() {
-				fmt.Printf("RECEIVED: %s\n", scanner.Text())
-			}
-			return scanner.Err()
-		})
-	})
 }
 
 func receive(operands []string) error {
@@ -328,28 +317,6 @@ func makeRegular(tr *tar.Reader, th *tar.Header, buf []byte) error {
 }
 
 // it would seem send transmits a format that native tar cannot decode
-
-func sendLines(operands []string) error {
-	if len(operands) < 1 {
-		usage(fmt.Sprintf("cannot send without destination address"))
-	}
-	return withDial(operands[0], func(w io.Writer) error {
-		return withEncryptingWriter(*optSecure, w, func(w io.Writer) error {
-			reader := bufio.NewReader(os.Stdin)
-			for {
-				fmt.Printf("> ")
-				line, err := reader.ReadString('\n')
-				if err != nil {
-					return err
-				}
-				fmt.Fprintf(os.Stderr, "[DEBUG] sending %q\n", line)
-				if _, err = w.Write([]byte(line)); err != nil {
-					return err
-				}
-			}
-		})
-	})
-}
 
 func send(operands []string) error {
 	if len(operands) < 1 {
