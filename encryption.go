@@ -29,8 +29,8 @@ type StreamDecryptor struct {
 	aead      cipher.AEAD
 	ior       io.Reader
 	idx       int // read index for plaintext
+	nonceSize int
 	err       error
-	nonce     []byte
 	plaintext []byte
 }
 
@@ -47,24 +47,16 @@ func NewDecryptor(rc io.Reader, key [32]byte) (*StreamDecryptor, error) {
 		return nil, err
 	}
 
-	// Read the nonce from beginning of the stream
-	nonce := make([]byte, gcm.NonceSize())
-	_, err = io.ReadFull(rc, nonce)
-	if err != nil {
-		return nil, fmt.Errorf("cannot read nonce: %s", err)
-	}
-
 	return &StreamDecryptor{
-		aead:  gcm,
-		nonce: nonce,
-		ior:   rc,
+		aead:      gcm,
+		ior:       rc,
+		nonceSize: gcm.NonceSize(),
 	}, nil
 }
 
 func (sd *StreamDecryptor) Close() error {
 	sd.aead = nil
 	sd.ior = nil
-	sd.nonce = nil
 	sd.plaintext = nil
 	return sd.err
 }
@@ -103,7 +95,7 @@ func (sd *StreamDecryptor) Read(buf []byte) (int, error) {
 			}
 
 			// Then decrypt into the plaintext buffer.
-			sd.plaintext, sd.err = sd.aead.Open(nil, sd.nonce, ciphertext, nil)
+			sd.plaintext, sd.err = sd.aead.Open(sd.plaintext[:0], ciphertext[:sd.nonceSize], ciphertext[sd.nonceSize:], nil)
 			if sd.err != nil {
 				return idx, fmt.Errorf("cannot decrypt ciphertext: %s", sd.err)
 			}
@@ -123,8 +115,8 @@ type StreamEncryptor struct {
 	aead      cipher.AEAD
 	iow       io.Writer
 	idx       int
+	nonceSize int
 	err       error
-	nonce     []byte
 	plaintext []byte
 }
 
@@ -141,24 +133,11 @@ func NewEncryptor(wc io.Writer, key [32]byte) (*StreamEncryptor, error) {
 		return nil, err
 	}
 
-	// Generate a randomized nonce
-	nonce := make([]byte, gcm.NonceSize())
-	_, err = io.ReadFull(rand.Reader, nonce)
-	if err != nil {
-		return nil, err
-	}
-
-	// Write the nonce to beginning of the stream
-	_, err = wc.Write(nonce)
-	if err != nil {
-		return nil, fmt.Errorf("cannot write nonce: %s", err)
-	}
-
 	return &StreamEncryptor{
 		aead:      gcm,
-		nonce:     nonce,
 		iow:       wc,
 		plaintext: make([]byte, EncryptionChunkSize),
+		nonceSize: gcm.NonceSize(),
 	}, nil
 }
 
@@ -170,8 +149,6 @@ func (se *StreamEncryptor) Close() error {
 	}
 	se.aead = nil
 	se.iow = nil
-	se.nonce = nil
-	se.plaintext = nil
 	return se.err
 }
 
@@ -225,7 +202,14 @@ func (se *StreamEncryptor) writeFrame(buf []byte) (int, error) {
 		return 0, se.err
 	}
 
-	ciphertext := se.aead.Seal(nil, se.nonce, buf, nil)
+	// Generate a random nonce for this frame
+	nonce := make([]byte, se.nonceSize)
+	_, se.err = io.ReadFull(rand.Reader, nonce)
+	if se.err != nil {
+		return 0, se.err
+	}
+
+	ciphertext := se.aead.Seal(nonce, nonce, buf, nil)
 
 	var sizeBuffer [8]byte
 	binary.BigEndian.PutUint64(sizeBuffer[:], uint64(len(ciphertext)))
@@ -235,8 +219,5 @@ func (se *StreamEncryptor) writeFrame(buf []byte) (int, error) {
 	}
 
 	nw2, err := se.iow.Write(ciphertext)
-	if got, want := nw2, len(ciphertext); got != want {
-		return nw1, fmt.Errorf("GOT %d; WANT: %d", got, want)
-	}
 	return nw1 + nw2, err
 }
