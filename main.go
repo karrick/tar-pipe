@@ -13,7 +13,6 @@ import (
 
 	"github.com/karrick/godirwalk"
 	"github.com/karrick/golf"
-	"golang.org/x/crypto/bcrypt"
 )
 
 const bufferSize = 4096
@@ -48,20 +47,15 @@ func main() {
 	}
 
 	if *optSecure {
-		fmt.Printf("Passphrase: ")
-		reader := bufio.NewReader(os.Stdin)
-		passphrase, err := reader.ReadString('\n')
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "cannot read input: %s", err)
-			os.Exit(1)
-		}
-		kk, err := bcrypt.GenerateFromPassword([]byte(passphrase), 14)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "cannot read input: %s", err)
-			os.Exit(1)
-		}
-		fmt.Printf("len(key): %d\n", len(kk))
-		copy(key[:], kk)
+		// fmt.Printf("Passphrase: ")
+		// reader := bufio.NewReader(os.Stdin)
+		// passphrase, err := reader.ReadString('\n')
+		// if err != nil {
+		// 	fmt.Fprintf(os.Stderr, "cannot read input: %s", err)
+		// 	os.Exit(1)
+		// }
+		passphrase := "test-one"
+		key = Key32FromPassphrase(passphrase, passphrase)
 	}
 
 	cmd, args := args[0], args[1:]
@@ -70,6 +64,10 @@ func main() {
 		exit(receive(args))
 	case "send":
 		exit(send(args))
+	case "receiveLines":
+		exit(receiveLines(args))
+	case "sendLines":
+		exit(sendLines(args))
 	default:
 		usage(fmt.Sprintf("invalid sub-command: %q", cmd))
 	}
@@ -90,7 +88,7 @@ func usage(message string) {
 
 func verbose(format string, a ...interface{}) {
 	if *optVerbose {
-		_, _ = fmt.Fprintf(os.Stdout, "tar-pipe: "+format, a...)
+		_, _ = fmt.Fprintf(os.Stderr, "tar-pipe: "+format, a...)
 	}
 }
 
@@ -98,103 +96,100 @@ func warning(format string, a ...interface{}) {
 	_, _ = fmt.Fprintf(os.Stderr, "tar-pipe: "+format, a...)
 }
 
-func withGzipReader(use bool, rc io.ReadCloser, callback func(io.ReadCloser) error) error {
-	if !use {
-		return callback(rc)
-	}
-	verbose("Using gzip compression\n")
-	z, err := gzip.NewReader(rc)
-	if err != nil {
-		return err
-	}
-	err = callback(z)
-	if err2 := z.Close(); err == nil {
-		err = err2
-	}
-	return err
-}
-
-func withDecrpytionReader(use bool, rc io.ReadCloser, callback func(io.Reader) error) error {
-	if !use {
-		return callback(rc)
-	}
-	verbose("Using encryption\n")
-
-	sd, err := NewDecryptor(rc, key)
-	if err != nil {
-		return err
-	}
-	err = callback(sd)
-	if err2 := sd.Close(); err == nil {
-		err = err2
-	}
-	return err
-}
-
-func withEncryptionWriter(use bool, wc io.WriteCloser, callback func(io.WriteCloser) error) error {
-	if !use {
-		return callback(wc)
-	}
-	verbose("Using encryption\n")
-
-	z, err := NewEncryptor(wc, key)
-	if err != nil {
-		return err
-	}
-	err = callback(z)
-	if err2 := z.Close(); err == nil {
-		err = err2
-	}
-	return err
-}
-
-func withGzipWriter(use bool, wc io.WriteCloser, callback func(io.WriteCloser) error) error {
-	if !use {
-		return callback(wc)
-	}
-	verbose("Using gzip compression\n")
-	z := gzip.NewWriter(wc)
-	err := callback(z)
-	if err2 := z.Close(); err == nil {
-		err = err2
-	}
-	return err
-}
-
-func withDial(remote string, callback func(io.WriteCloser) error) error {
+func withDial(remote string, callback func(io.Writer) error) error {
 	conn, err := net.Dial("tcp", remote)
 	if err != nil {
 		return err
 	}
 	verbose("Connected: %q\n", conn.RemoteAddr())
 
-	err = withGzipWriter(*optZip, conn, func(wc io.WriteCloser) error {
-		return callback(wc)
-	})
-
+	err = callback(conn)
 	if err2 := conn.Close(); err == nil {
 		err = err2
 	}
 	return err
 }
 
-func withListen(bind string, callback func(ior io.ReadCloser) error) error {
+func withEncryptingWriter(use bool, w io.Writer, callback func(io.Writer) error) error {
+	if !use {
+		return callback(w)
+	}
+	verbose("Using AES-GCM encryption\n")
+
+	encryptingWriter, err := NewEncryptor(w, key)
+	if err != nil {
+		return err
+	}
+	err = callback(encryptingWriter)
+	if err2 := encryptingWriter.Close(); err == nil {
+		err = err2
+	}
+	return err
+}
+
+func withCompressingWriter(use bool, w io.Writer, callback func(io.Writer) error) error {
+	if !use {
+		return callback(w)
+	}
+	verbose("Using GZIP compression\n")
+
+	compressingWriter := gzip.NewWriter(w)
+	err := callback(compressingWriter)
+	if err2 := compressingWriter.Close(); err == nil {
+		err = err2
+	}
+	return err
+}
+
+func withListen(bind string, callback func(ior io.Reader) error) error {
 	l, err := net.Listen("tcp", bind)
 	if err != nil {
 		return err
 	}
 	verbose("Listening: %q\n", bind)
+
 	conn, err := l.Accept()
 	if err != nil {
 		return err
 	}
 	verbose("Accepted connection: %q\n", conn.RemoteAddr())
 
-	err = withGzipReader(*optZip, conn, func(rc io.ReadCloser) error {
-		return callback(rc)
-	})
-
+	err = callback(conn)
 	if err2 := conn.Close(); err == nil {
+		err = err2
+	}
+	return err
+}
+
+func withDecrpytingReader(use bool, r io.Reader, callback func(io.Reader) error) error {
+	if !use {
+		return callback(r)
+	}
+	verbose("Using AES-GCM encryption\n")
+
+	decryptingReader, err := NewDecryptor(r, key)
+	if err != nil {
+		return err
+	}
+	err = callback(decryptingReader)
+	if err2 := decryptingReader.Close(); err == nil {
+		err = err2
+	}
+	return err
+}
+
+func withDecompressingReader(use bool, r io.Reader, callback func(io.Reader) error) error {
+	if !use {
+		return callback(r)
+	}
+	verbose("Using GZIP compression\n")
+
+	decompressingReader, err := gzip.NewReader(r)
+	if err != nil {
+		return err
+	}
+	err = callback(decompressingReader)
+	if err2 := decompressingReader.Close(); err == nil {
 		err = err2
 	}
 	return err
@@ -206,87 +201,106 @@ type dirBlurb struct {
 	ModTime time.Time
 }
 
+func receiveLines(operands []string) error {
+	if len(operands) < 1 {
+		usage(fmt.Sprintf("cannot receive without binding address"))
+	}
+	return withListen(operands[0], func(r io.Reader) error {
+		return withDecrpytingReader(*optSecure, r, func(r io.Reader) error {
+			scanner := bufio.NewScanner(r)
+			for scanner.Scan() {
+				fmt.Printf("RECEIVED: %s\n", scanner.Text())
+			}
+			return scanner.Err()
+		})
+	})
+}
+
 func receive(operands []string) error {
 	if len(operands) < 1 {
 		usage(fmt.Sprintf("cannot receive without binding address"))
 	}
-	return withListen(operands[0], func(rc io.ReadCloser) error {
-		var directories []dirBlurb
+	return withListen(operands[0], func(r io.Reader) error {
+		return withDecrpytingReader(*optSecure, r, func(r io.Reader) error {
+			return withDecompressingReader(*optZip, r, func(r io.Reader) error {
+				var directories []dirBlurb
 
-		buf := make([]byte, 64*1024)
+				buf := make([]byte, 64*1024)
 
-		tr := tar.NewReader(rc)
-		for {
-			th, err := tr.Next()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				return err
-			}
-
-			dirname := filepath.Dir(th.Name)
-			if err = os.MkdirAll(dirname, os.ModePerm); err != nil {
-				return err
-			}
-
-			switch th.Typeflag {
-			case tar.TypeDir:
-				_, err = os.Stat(th.Name)
-				if err == nil {
-					// TODO: what if entry is not a directory?
-					if err = os.Chmod(th.Name, os.FileMode(th.Mode)); err != nil {
+				tarReader := tar.NewReader(r)
+				for {
+					th, err := tarReader.Next()
+					if err == io.EOF {
+						break
+					}
+					if err != nil {
 						return err
 					}
-				} else if os.IsNotExist(err) {
-					if err = os.Mkdir(th.Name, os.FileMode(th.Mode)); err != nil {
+
+					dirname := filepath.Dir(th.Name)
+					if err = os.MkdirAll(dirname, os.ModePerm); err != nil {
+						return err
+					}
+
+					switch th.Typeflag {
+					case tar.TypeDir:
+						_, err = os.Stat(th.Name)
+						if err == nil {
+							// TODO: what if entry is not a directory?
+							if err = os.Chmod(th.Name, os.FileMode(th.Mode)); err != nil {
+								return err
+							}
+						} else if os.IsNotExist(err) {
+							if err = os.Mkdir(th.Name, os.FileMode(th.Mode)); err != nil {
+								return err
+							}
+						}
+						// Cannot set the mtime of a directory entry now, but must do so
+						// after we process all the child entries in that directory. For
+						// now, we'll store a bit of information that we can use later
+						// to set the mtime for the directory.
+						directories = append(directories, dirBlurb{th.Name, th.ModTime})
+					case tar.TypeLink:
+						if err = os.Link(th.Linkname, th.Name); err != nil {
+							return err
+						}
+						if err = os.Chtimes(th.Name, th.ModTime, th.ModTime); err != nil {
+							return err
+						}
+					case tar.TypeSymlink:
+						if err = os.Symlink(th.Linkname, th.Name); err != nil {
+							return err
+						}
+						// ??? Chtimes does not seem to work on a symlink
+					case tar.TypeFifo:
+						if err = makeFIFO(th, tarReader, buf); err != nil {
+							return err
+						}
+					default:
+						// TODO: support tar.TypeBlock
+						// TODO: support tar.TypeChar
+						if err = makeRegular(tarReader, th, buf); err != nil {
+							return err
+						}
+					}
+				}
+
+				// Walk list of directories backwards, to ensure modification times are
+				// not updated by later updates deeper inside a directory
+				// location. Because program will send /foo through the pipe before
+				// /foo/bar, a reverse of the directory order will ensure we update the
+				// modification time for /foo/bar before we update the modification time
+				// for /foo.
+				for i := len(directories) - 1; i >= 0; i-- {
+					de := directories[i]
+					if err := os.Chtimes(de.Name, de.ModTime, de.ModTime); err != nil {
 						return err
 					}
 				}
-				// Cannot set the mtime of a directory entry now, but must do so
-				// after we process all the child entries in that directory. For
-				// now, we'll store a bit of information that we can use later
-				// to set the mtime for the directory.
-				directories = append(directories, dirBlurb{th.Name, th.ModTime})
-			case tar.TypeLink:
-				if err = os.Link(th.Linkname, th.Name); err != nil {
-					return err
-				}
-				if err = os.Chtimes(th.Name, th.ModTime, th.ModTime); err != nil {
-					return err
-				}
-			case tar.TypeSymlink:
-				if err = os.Symlink(th.Linkname, th.Name); err != nil {
-					return err
-				}
-				// ??? Chtimes does not seem to work on a symlink
-			case tar.TypeFifo:
-				if err = makeFIFO(th, tr, buf); err != nil {
-					return err
-				}
-			default:
-				// TODO: support tar.TypeBlock
-				// TODO: support tar.TypeChar
-				if err = makeRegular(tr, th, buf); err != nil {
-					return err
-				}
-			}
-		}
 
-		// Walk list of directories backwards, to ensure modification times are
-		// not updated by later updates deeper inside a directory
-		// location. Because program will send /foo through the pipe before
-		// /foo/bar, a reverse of the directory order will ensure we update the
-		// modification time for /foo/bar before we update the modification time
-		// for /foo.
-		for i := len(directories) - 1; i >= 0; i-- {
-			de := directories[i]
-			if err := os.Chtimes(de.Name, de.ModTime, de.ModTime); err != nil {
-				return err
-			}
-		}
-
-		return nil
+				return nil
+			})
+		})
 	})
 }
 
@@ -316,26 +330,52 @@ func makeRegular(tr *tar.Reader, th *tar.Header, buf []byte) error {
 
 // it would seem send transmits a format that native tar cannot decode
 
+func sendLines(operands []string) error {
+	if len(operands) < 1 {
+		usage(fmt.Sprintf("cannot send without destination address"))
+	}
+	return withDial(operands[0], func(w io.Writer) error {
+		return withEncryptingWriter(*optSecure, w, func(w io.Writer) error {
+			reader := bufio.NewReader(os.Stdin)
+			for {
+				fmt.Printf("> ")
+				line, err := reader.ReadString('\n')
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(os.Stderr, "[DEBUG] sending %q\n", line)
+				if _, err = w.Write([]byte(line)); err != nil {
+					return err
+				}
+			}
+		})
+	})
+}
+
 func send(operands []string) error {
 	if len(operands) < 1 {
 		usage(fmt.Sprintf("cannot send without destination address"))
 	}
-	return withDial(operands[0], func(wc io.WriteCloser) error {
-		var err error
-		tw := tar.NewWriter(wc)
-		if len(operands) == 1 {
-			operands = append(operands, ".")
-		}
-		buf := make([]byte, 64*1024)
-		for _, operand := range operands[1:] {
-			if err = tarpath(tw, operand, buf); err != nil {
+	return withDial(operands[0], func(w io.Writer) error {
+		return withEncryptingWriter(*optSecure, w, func(w io.Writer) error {
+			return withCompressingWriter(*optZip, w, func(w io.Writer) error {
+				var err error
+				tarWriter := tar.NewWriter(w)
+				if len(operands) == 1 {
+					operands = append(operands, ".")
+				}
+				buf := make([]byte, 64*1024)
+				for _, operand := range operands[1:] {
+					if err = tarpath(tarWriter, operand, buf); err != nil {
+						break
+					}
+				}
+				if err2 := tarWriter.Close(); err == nil {
+					err = err2
+				}
 				return err
-			}
-		}
-		if err2 := tw.Close(); err == nil {
-			err = err2
-		}
-		return err
+			})
+		})
 	})
 }
 

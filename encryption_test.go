@@ -2,26 +2,19 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"testing"
-
-	"github.com/karrick/gorill"
-	"golang.org/x/crypto/bcrypt"
 )
 
-func key32(tb testing.TB, passphrase string) [32]byte {
-	kk, err := bcrypt.GenerateFromPassword([]byte(passphrase), 14)
-	if err != nil {
-		tb.Fatal(err)
-	}
-	var key [32]byte
-	copy(key[:], kk[:32])
-	return key
-}
-
 func TestEncryption(t *testing.T) {
-	key := key32(t, "test-passphrase")
+	key1 := Key32FromPassphrase("some-tag", "test-passphrase")
+	key2 := Key32FromPassphrase("some-tag", "test-passphrase")
 
-	cipherstream := gorill.NewNopCloseBuffer()
+	if !bytes.Equal(key1[:], key2[:]) {
+		t.Fatalf("GOT: %q; WANT: %q", key1, key2)
+	}
+
+	cipherstream := new(bytes.Buffer)
 	se, err := NewEncryptor(cipherstream, key)
 	if err != nil {
 		t.Fatal(err)

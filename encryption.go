@@ -3,24 +3,38 @@ package main
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha512"
 	"encoding/binary"
 	"fmt"
 	"io"
 )
 
-const EncryptionChunkSize = 4096
+func Key32FromPassphrase(tag, passphrase string) [32]byte {
+	var key [32]byte
+
+	h := hmac.New(sha512.New512_256, []byte(tag))
+	_, _ = h.Write([]byte(passphrase)) // hmac Write never returns error
+
+	// Copy first 32 bytes of the HMAC digest into the key
+	copy(key[:], h.Sum(nil)[:32])
+
+	return key
+}
+
+const EncryptionChunkSize = 1024
 
 type StreamDecryptor struct {
 	aead      cipher.AEAD
-	rc        io.ReadCloser
-	ri        int // read index for plaintext
+	ior       io.Reader
+	idx       int // read index for plaintext
 	err       error
 	nonce     []byte
 	plaintext []byte
 }
 
-func NewDecryptor(rc io.ReadCloser, key [32]byte) (*StreamDecryptor, error) {
+func NewDecryptor(rc io.Reader, key [32]byte) (*StreamDecryptor, error) {
 	// Initialize a block cipher
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
@@ -43,21 +57,19 @@ func NewDecryptor(rc io.ReadCloser, key [32]byte) (*StreamDecryptor, error) {
 	return &StreamDecryptor{
 		aead:  gcm,
 		nonce: nonce,
-		rc:    rc,
+		ior:   rc,
 	}, nil
 }
 
 func (sd *StreamDecryptor) Close() error {
+	sd.aead = nil
+	sd.ior = nil
 	sd.nonce = nil
 	sd.plaintext = nil
-	err := sd.rc.Close()
-	if sd.err == nil {
-		sd.err = err
-	}
 	return sd.err
 }
 
-//                ri
+//                idx
 //                |
 //                v
 // abcdefghijklmnopqrstuvwxyz
@@ -68,55 +80,55 @@ func (sd *StreamDecryptor) Read(buf []byte) (int, error) {
 		return 0, sd.err
 	}
 
-	var bi int
+	var idx int
 
 	// When more room in client's buf
-	for len(buf) > bi {
+	for len(buf) > idx {
 		// When nothing left to copy from plaintext buffer
-		if sd.ri == len(sd.plaintext) {
+		if sd.idx == len(sd.plaintext) {
 			// Read the number of ciphertext bytes that are available.
-			var sbuf [8]byte
-			_, sd.err = io.ReadFull(sd.rc, sbuf[:])
+			var sizeBuffer [8]byte
+			_, sd.err = io.ReadFull(sd.ior, sizeBuffer[:])
 			if sd.err != nil {
-				return bi, sd.err
+				return idx, sd.err
 			}
 
-			size := int(binary.BigEndian.Uint64(sbuf[:]))
+			size := int(binary.BigEndian.Uint64(sizeBuffer[:]))
 			ciphertext := make([]byte, size)
 
 			// Read the ciphertext bytes.
-			_, sd.err = io.ReadFull(sd.rc, ciphertext)
+			_, sd.err = io.ReadFull(sd.ior, ciphertext)
 			if sd.err != nil {
-				return bi, sd.err
+				return idx, fmt.Errorf("cannot read %d byte frame: %s", size, sd.err)
 			}
 
 			// Then decrypt into the plaintext buffer.
 			sd.plaintext, sd.err = sd.aead.Open(nil, sd.nonce, ciphertext, nil)
 			if sd.err != nil {
-				return bi, sd.err
+				return idx, fmt.Errorf("cannot decrypt ciphertext: %s", sd.err)
 			}
-			sd.ri = 0
+			sd.idx = 0
 		}
 
 		// Copy data from plaintext buffer to client buffer
-		nc := copy(buf[bi:], sd.plaintext[sd.ri:])
-		bi += nc
-		sd.ri += nc
+		nc := copy(buf[idx:], sd.plaintext[sd.idx:])
+		idx += nc
+		sd.idx += nc
 	}
 
-	return bi, nil
+	return idx, nil
 }
 
 type StreamEncryptor struct {
 	aead      cipher.AEAD
-	wc        io.WriteCloser
-	pi        int
+	iow       io.Writer
+	idx       int
 	err       error
 	nonce     []byte
 	plaintext []byte
 }
 
-func NewEncryptor(wc io.WriteCloser, key [32]byte) (*StreamEncryptor, error) {
+func NewEncryptor(wc io.Writer, key [32]byte) (*StreamEncryptor, error) {
 	// Initialize a block cipher
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
@@ -145,21 +157,21 @@ func NewEncryptor(wc io.WriteCloser, key [32]byte) (*StreamEncryptor, error) {
 	return &StreamEncryptor{
 		aead:      gcm,
 		nonce:     nonce,
-		wc:        wc,
+		iow:       wc,
 		plaintext: make([]byte, EncryptionChunkSize),
 	}, nil
 }
 
 func (se *StreamEncryptor) Close() error {
 	err := se.Flush()
-	se.plaintext = nil // future Write operations will panic
-	if err2 := se.wc.Close(); err == nil {
-		err = err2
-	}
 	// Only overwrite instance error when it is already nil.
 	if se.err == nil {
 		se.err = err
 	}
+	se.aead = nil
+	se.iow = nil
+	se.nonce = nil
+	se.plaintext = nil
 	return se.err
 }
 
@@ -167,9 +179,9 @@ func (se *StreamEncryptor) Flush() error {
 	if se.err != nil {
 		return se.err
 	}
-	if se.pi > 0 {
-		_, se.err = se.writeFrame(se.plaintext[:se.pi])
-		se.pi = 0
+	if se.idx > 0 {
+		_, se.err = se.writeFrame(se.plaintext[:se.idx])
+		se.idx = 0
 	}
 	return se.err
 }
@@ -179,23 +191,25 @@ func (se *StreamEncryptor) Write(buf []byte) (int, error) {
 		return 0, se.err
 	}
 
-	// When new data will fit into plaintext buffer, append it.
-	if len(se.plaintext) >= se.pi+len(buf) {
-		nc := copy(se.plaintext[se.pi:], buf)
-		se.pi += nc
-		return nc, nil
-	}
+	if true {
+		// When new data will fit into plaintext buffer, append it.
+		if len(se.plaintext) >= se.idx+len(buf) {
+			nc := copy(se.plaintext[se.idx:], buf)
+			se.idx += nc
+			return nc, nil
+		}
 
-	// New data will not fit onto plaintext buffer, so send existing plaintext
-	// buffer.
-	if se.err = se.Flush(); se.err != nil {
-		return 0, se.err
-	}
+		// New data will not fit onto plaintext buffer, so send existing plaintext
+		// buffer.
+		if se.err = se.Flush(); se.err != nil {
+			return 0, se.err
+		}
 
-	// When new data will fit into plaintext buffer, append it.
-	if len(se.plaintext) >= len(buf) {
-		se.pi = copy(se.plaintext, buf)
-		return se.pi, nil
+		// When new data will fit into plaintext buffer, append it.
+		if len(se.plaintext) >= len(buf) {
+			se.idx = copy(se.plaintext, buf)
+			return se.idx, nil
+		}
 	}
 
 	// Send this blob
@@ -213,13 +227,16 @@ func (se *StreamEncryptor) writeFrame(buf []byte) (int, error) {
 
 	ciphertext := se.aead.Seal(nil, se.nonce, buf, nil)
 
-	var size [8]byte
-	binary.BigEndian.PutUint64(size[:], uint64(len(ciphertext)))
-	nw, err := se.wc.Write(size[:])
+	var sizeBuffer [8]byte
+	binary.BigEndian.PutUint64(sizeBuffer[:], uint64(len(ciphertext)))
+	nw1, err := se.iow.Write(sizeBuffer[:])
 	if err != nil {
-		return nw, fmt.Errorf("cannot write length: %s", err)
+		return nw1, fmt.Errorf("cannot write frame length: %s", err)
 	}
 
-	nw2, err := se.wc.Write(ciphertext)
-	return nw + nw2, err
+	nw2, err := se.iow.Write(ciphertext)
+	if got, want := nw2, len(ciphertext); got != want {
+		return nw1, fmt.Errorf("GOT %d; WANT: %d", got, want)
+	}
+	return nw1 + nw2, err
 }
